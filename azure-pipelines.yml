@@ -1,0 +1,225 @@
+#  Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+resources:
+  repositories:
+  - repository: self
+    type: git
+    ref: dev
+  - repository: TestAutomation
+    type : git
+    name : TestAutomation
+    ref : dev
+
+trigger:
+  branches:
+    include:
+      - dev
+
+variables:
+- name: branchName
+  value: $[replace(variables['Build.SourceBranchName'], 'refs/heads/', '')]
+- name: projectNameSQ
+  value: 'Academy'
+- name: artifactsPath
+  value: '$(Build.SourcesDirectory)/$(Build.Repository.Name)'
+- name: SQ-QualityGate 
+  value: 'FeatureServices'
+- name: productNameMend
+  value: 'Academy-dev'
+- name: projectNameMend
+  value: 'API'
+- name: artifactName
+  value: 'bdd-api'
+- group: SonarQube
+- group: WhiteSource
+- name: API-URL-DEV
+  value: https://student-app-dev.azurewebsites.net/swagger/index.html
+- name: API-URL-RELEASE
+  value: https://student-app.azurewebsites.net/swagger/index.html
+
+
+pool:
+  vmImage: windows-latest
+
+jobs:
+  - job: AcademyPipeline
+    steps:
+    - checkout: self
+     
+    #Installing DotNet
+    - task: UseDotNet@2
+      displayName: 'Install DotNet'
+      inputs:
+        version: '6.x'
+        packageType: 'sdk'
+        includePreviewVersions: true
+
+    #Restoring DotNet
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore DotNet'
+      inputs:
+        command: 'restore'
+        feedsToUse: 'select'
+        projects: '**/*.sln'
+
+    #Installing Report Generator Tool 
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: DotNetCoreCLI@2
+        displayName: 'Install report generator tool'
+        inputs:
+          command: custom
+          custom: tool
+          arguments: install --tool-path . dotnet-reportgenerator-globaltool
+
+    #Starting Sonar Scanner
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - template: Templates/Tools/SonarQubeMsBuildStart.yml@TestAutomation
+        parameters:
+          projectName: '$(projectNameSQ)'
+          branchName: '$(branchName)'
+          coveragePaths: '$(artifactsPath)/reports/SonarQube.xml'
+          workingDirectory: '$(artifactsPath)'
+          version: '22.1'
+
+    #Build the project
+    - task: DotNetCoreCLI@2
+      displayName: 'Build the project'
+      inputs:
+        command: 'build'
+        projects: '**/*.sln'
+
+    #Run test and create the test coverage
+    - task: DotNetCoreCLI@2
+      displayName: 'Run Unit Tests'
+      inputs:
+        command: 'test'
+        projects: |
+          **/UnitTest.csproj
+        arguments: '--collect:"XPlat Code Coverage"'
+
+    #Publish the .NET artifact to zip
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: DotNetCoreCLI@2
+        displayName: 'Publish DotNetCore Artifact'
+        inputs:
+          command: 'publish'
+          publishWebProjects: false
+          projects: '**/API.sln'
+          arguments: '--output $(Build.ArtifactStagingDirectory)'
+          zipAfterPublish: true
+
+    #Generating the SonarQube.xml from the test coverage created before
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - script: reportgenerator -reports:"$(Agent.TempDirectory)/**/coverage.cobertura.xml" -targetdir:"$(artifactsPath)/reports" -reporttypes:"SonarQube"
+        displayName: 'Generate the report'
+
+    #Publishing the test coverage
+    - task: PublishCodeCoverageResults@1
+      displayName: 'Publish code coverage'
+      inputs:
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(Agent.TempDirectory)/**/coverage.cobertura.xml'
+        reportDirectory: $(Build.SourcesDirectory)/reports
+        
+    #Install mutation report
+    - ${{ if not(in(variables['Build.SourceBranchName'], 'release', 'dev')) }}:
+      - task: DotNetCoreCLI@2
+        displayName: 'Install dotnet-stryker'
+        inputs:
+          command: custom
+          custom: tool
+          arguments: install dotnet-stryker --tool-path $(Agent.BuildDirectory)/tools
+
+    #Run mutation report
+    - ${{ if not(in(variables['Build.SourceBranchName'], 'release', 'dev') )}}:
+      - task: Powershell@2
+        displayName: 'Run dotnet-stryker'
+        inputs:
+          workingDirectory: '$(Build.SourcesDirectory)/BDD_API/UnitTest'
+          targetType: 'inline'
+          pwsh: true
+          script: $(Agent.BuildDirectory)/tools/dotnet-stryker
+
+    #Publish mutation report
+    - ${{ if not(in(variables['Build.SourceBranchName'], 'release', 'dev')) }}:
+      - task: PublishMutationReport@1
+        displayName: 'Publish Mutation Test Report'
+        inputs:
+          reportPattern: '**/mutation-report.html'
+
+    #Send all information to SonarQube Server
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - template: Templates/Tools/SonarQubeMsBuildEnd.yml@TestAutomation
+        parameters:
+            branchName:  '$(branchName)'
+            qualityGate: '$(SQ-QualityGate)'
+
+    # Publish the artifact of the project
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: PublishPipelineArtifact@1
+        displayName: 'Publish Artifact of the Project'
+        inputs:
+          targetPath: '$(Build.ArtifactStagingDirectory)' 
+          artifact: '$(artifactName)'
+          publishLocation: 'pipeline'
+    
+    #Mend
+    - ${{ if in(variables['Build.SourceBranchName'], 'dev') }}:
+      - template: Templates/Tools/whitesourceScanSteps.yml@TestAutomation
+        parameters:
+          ${{ if eq(variables['Build.Reason'],'IndividualCI')}}:
+            wsConfigFile: whiteSource-file.config
+          artifactsPath: '$(Build.SourcesDirectory)/Academy'
+          pullTemplateRepo: true
+          productName: '$(productNameMend)'
+          projectName: '$(projectNameMend)'
+          userKey: '' # Replace with your userKey
+    
+    #Azure App Service deployment for dev branch
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: AzureRmWebAppDeployment@4
+        displayName: 'Azure App Service Deployment'
+        inputs:
+          ConnectionType: 'AzureRM'
+          azureSubscription: '' # Replace with your azure subscription 
+          appType: 'webApp'
+          WebAppName: 'bdd-student-app-dev'
+          ResourceGroupName: 'AcademyTest-rg'
+          packageForLinux: '$(Build.ArtifactStagingDirectory)/**/*.zip'
+
+    #Smoke Test in dev branch
+    - ${{ if eq(variables['Build.SourceBranchName'], 'dev') }}:
+      - task: PowerShell@2
+        displayName: Smoke Test
+        inputs:
+          targetType: 'inline'
+          script: |
+            $SLEEP_TIME = 5;
+            for($tryNumber = 1; $tryNumber -lt 3; tryNumber++)
+            {
+              $result = (Invoke-WebRequest -Uri $(API-URL-DEV)).StatusCode;
+              if ($result -eq 200){ Write-Host "Smoke test passed"; exit 0; }
+              Start-Sleep -Seconds $SLEEP_TIME;
+            }
+            Write-Host "Smoke test failed";
+            return $LASTEXITCODE;
+
+    #Smoke Test in release branch
+    - ${{ if eq(variables['Build.SourceBranchName'], 'release') }}:
+      - task: PowerShell@2
+        displayName: Smoke Test
+        inputs:
+          targetType: 'inline'
+          script: |
+            $SLEEP_TIME = 5;
+            for($tryNumber = 1; $tryNumber -lt 3; tryNumber++)
+            {
+              $result = (Invoke-WebRequest -Uri $(API-URL-RELEASE)).StatusCode;
+              if ($result -eq 200){ Write-Host "Smoke test passed"; exit 0; }
+              Start-Sleep -Seconds $SLEEP_TIME;
+            }
+            Write-Host "Smoke test failed";
+            return $LASTEXITCODE;
