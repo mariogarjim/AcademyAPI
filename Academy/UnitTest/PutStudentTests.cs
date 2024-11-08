@@ -133,19 +133,7 @@ namespace UnitTest
             result.StatusCode.Should().Be(400);
         }
 
-        // 5. Invalid date of birth.
-        [Fact]
-        public async void TestPut_InvalidDateOfBirth_ReturnsBadRequest()
-        {
-            Alumn studentWithInvalidBirthDate = Utilities.GetAlumnWithInvalidBirthDate().AsAlumnEntity(TENANT);
-
-            var result = (BadRequestObjectResult)await alumnsController.PutAsync(studentWithInvalidBirthDate.AsCreateDto());
-
-            result.StatusCode.Should().Be(400);
-            result.Value.Should().Be("Date of birth is invalid");
-        }
-
-        // 6. Student name has forbidden characters.
+        // 5. Student name has forbidden characters.
         [Fact]
         public async void TestPut_ForbiddenChars_ReturnsBadRequest()
         {

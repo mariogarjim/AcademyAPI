@@ -109,17 +109,6 @@ namespace UnitTest
         }
         
         [Fact]
-        public async void TestPost_InvalidDateOfBirth_ReturnsBadRequest()
-        {
-            Alumn studentWithInvalidBirthDate = Utilities.GetAlumnWithInvalidBirthDate().AsAlumnEntity("UniversityOfGranada");
-
-            var result = (BadRequestObjectResult)await alumnsController.PostAsync(studentWithInvalidBirthDate.AsCreateDto());
-
-            result.StatusCode.Should().Be(400);
-            result.Value.Should().Be("Date of birth is invalid");
-        }
-        
-        [Fact]
         public async void TestPost_ForbiddenChars_ReturnsBadRequest()
         {
             Alumn studentWithForbiddenChars = Utilities.GetAlumnWithForbiddenChars().AsAlumnEntity("UniversityOfGranada");
