@@ -16,3 +16,5 @@ Lisbon, Granada, Warsaw and Paris academies, developed using ASP.NET Core 6
 Relevant:
 * Deployment using Azure Data Pipelines
 * Multitenancy
+* TDD
+* SonarQube and Mend
